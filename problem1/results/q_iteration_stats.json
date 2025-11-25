@@ -1,0 +1,5 @@
+{
+    "iterations": 136,
+    "gamma": 0.95,
+    "epsilon": 0.0001
+}
