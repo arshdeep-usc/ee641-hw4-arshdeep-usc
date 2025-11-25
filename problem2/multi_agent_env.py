@@ -97,9 +97,9 @@ class MultiAgentEnv:
         self.comm_signals = [0.0, 0.0]
 
         free_cells = self._find_free_cells()
-        start_positions = np.random.choice(len(free_cells), 2, replace=False)
-        self.agent_positions[0] = free_cells[start_positions[0]]
-        self.agent_positions[1] = free_cells[start_positions[1]]
+        idxs = np.random.choice(len(free_cells), size=2, replace=False)
+        self.agent_positions[0] = free_cells[idxs[0]]
+        self.agent_positions[1] = free_cells[idxs[1]]
 
         obs_A = self._get_observation(0)
         obs_B = self._get_observation(1)
@@ -209,7 +209,7 @@ class MultiAgentEnv:
         # TODO: Check if position is within grid bounds
         # TODO: Check if position is not an obstacle (grid value != 1)
 
-        if not (0 < pos[0] < self.grid_size[0] and 0 < pos[1] < self.grid_size[1]):
+        if not (0 < pos[0] < self.grid_size[0] and 0 < pos[1] < self.grid_size[1] and self.grid[pos] != 1):
             return False
             
         return True

@@ -58,32 +58,29 @@ class MultiAgentEvaluator:
         # TODO: Return results and statistics
 
         sA, sB = self.env.reset()
-
-        info = {
-            "positions_A": [],
-            "positions_B": [],
-            "comm_A": [],
-            "comm_B": [],
-            "steps": 0
-        }
-
-        episode_reward = 0.0
+        total_reward = 0.0
         success = False
+        comm_signals_A, comm_signals_B = [], []
+        positions_A, positions_B = [], []
 
-        for t in range(self.env.max_steps):
+        for step in range(self.env.max_steps):
+            state_A = torch.tensor(sA, dtype=torch.float32).unsqueeze(0).to(self.device)
+            state_B = torch.tensor(sB, dtype=torch.float32).unsqueeze(0).to(self.device)
 
-            aA, comA = self._greedy(self.model_A, sA)
-            aB, comB = self._greedy(self.model_B, sB)
+            with torch.no_grad():
+                qA, commA = self.model_A(state_A)
+                qB, commB = self.model_B(state_B)
+                actionA = qA.argmax(dim=1).item()
+                actionB = qB.argmax(dim=1).item()
+                commA, commB = commA.item(), commB.item()
 
-            (nA, nB), r, done = self.env.step(aA, aB, comA, comB)
+            (nA, nB), r, done = self.env.step(actionA, actionB, commA, commB)
+            total_reward += r
 
-            info["positions_A"].append(self.env.agent_positions[0])
-            info["positions_B"].append(self.env.agent_positions[1])
-            info["comm_A"].append(comA)
-            info["comm_B"].append(comB)
-
-            episode_reward += r
-            sA, sB = nA, nB
+            comm_signals_A.append(commA)
+            comm_signals_B.append(commB)
+            positions_A.append(self.env.agent_positions[0])
+            positions_B.append(self.env.agent_positions[1])
 
             if render:
                 self.env.render()
@@ -91,14 +88,22 @@ class MultiAgentEvaluator:
             if r == 10.0:
                 success = True
                 break
-
             if done:
-                success = (r == 10)
+                success = (r >= 10.0)
                 break
 
-        info["steps"] = t + 1
+            sA, sB = nA, nB
 
-        return episode_reward, success, info
+        info = {
+            "steps": step + 1,
+            "comm_A": comm_signals_A,
+            "comm_B": comm_signals_B,
+            "positions_A": positions_A,
+            "positions_B": positions_B
+        }
+
+        return total_reward, success, info
+
 
     def evaluate_performance(self, num_episodes: int = 100) -> Dict:
         """
@@ -116,24 +121,22 @@ class MultiAgentEvaluator:
         # TODO: Measure coordination efficiency
         # TODO: Return comprehensive statistics
 
-        rewards, successes, steps = [], [], []
+        rewards, successes, lengths = [], [], []
 
         for _ in range(num_episodes):
-            r, s, info = self.run_episode(render=False)
-            rewards.append(r)
-            successes.append(int(s))
-            steps.append(info["steps"])
+            reward, success, info = self.run_episode()
+            rewards.append(reward)
+            successes.append(success)
+            lengths.append(info["steps"])
 
         stats = {
             "mean_reward": float(np.mean(rewards)),
-            "median_reward": float(np.median(rewards)),
             "success_rate": float(np.mean(successes)),
-            "avg_steps": float(np.mean(steps)),
-            "episodes": num_episodes
+            "avg_episode_length": float(np.mean(lengths)),
+            "std_reward": float(np.std(rewards))
         }
-
+        
         return stats
-
 
     def analyze_communication(self, num_episodes: int = 20) -> Dict:
         """
@@ -147,30 +150,24 @@ class MultiAgentEvaluator:
         # TODO: Identify communication strategies
         # TODO: Return analysis results
 
-        all_A, all_B = [], []
+        all_comm_A, all_comm_B = [], []
 
         for _ in range(num_episodes):
-            _, _, info = self.run_episode(render=False)
-            all_A.extend(info["comm_A"])
-            all_B.extend(info["comm_B"])
+            _, _, info = self.run_episode()
+            all_comm_A.extend(info["comm_A"])
+            all_comm_B.extend(info["comm_B"])
 
-        all_A = np.array(all_A, dtype=np.float32)
-        all_B = np.array(all_B, dtype=np.float32)
+        commA = np.array(all_comm_A)
+        commB = np.array(all_comm_B)
 
         analysis = {
-            "A_mean": float(all_A.mean()),
-            "A_std": float(all_A.std()),
-            "A_max": float(all_A.max()),
-            "A_min": float(all_A.min()),
-
-            "B_mean": float(all_B.mean()),
-            "B_std": float(all_B.std()),
-            "B_max": float(all_B.max()),
-            "B_min": float(all_B.min()),
-
-            "correlation": float(np.corrcoef(all_A, all_B)[0, 1]) if len(all_A) > 1 else 0.0
+            "mean_comm_A": float(np.mean(commA)),
+            "mean_comm_B": float(np.mean(commB)),
+            "var_comm_A": float(np.var(commA)),
+            "var_comm_B": float(np.var(commB)),
+            "correlation": float(np.corrcoef(commA, commB)[0, 1]) if len(commA) > 5 else 0.0
         }
-
+        
         return analysis
 
     def visualize_trajectory(self, save_path: str = 'results/trajectory.png') -> None:
@@ -188,21 +185,59 @@ class MultiAgentEvaluator:
 
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-        r, s, info = self.run_episode(render=False)
+        # Run one episode to collect positions
+        _, _, info = self.run_episode(render=False)
+        posA = np.array(info["positions_A"])
+        posB = np.array(info["positions_B"])
 
-        grid = self.env.grid.copy()
-
-        A_path = np.array(info["positions_A"])
-        B_path = np.array(info["positions_B"])
+        rows, cols = self.env.grid_size
 
         plt.figure(figsize=(6, 6))
-        plt.imshow(grid, cmap="gray_r")
+        ax = plt.gca()
 
-        plt.plot(A_path[:, 1], A_path[:, 0], 'r.-', label='Agent A')
-        plt.plot(B_path[:, 1], B_path[:, 0], 'b.-', label='Agent B')
+        # Show grid cells as an image:
+        #   0: free  -> light gray
+        #   1: obstacle -> black
+        #   2: target -> green
+        grid_img = np.zeros((rows, cols, 3), dtype=float)
 
-        plt.title(f"Trajectory (Success={s})")
-        plt.legend()
+        for r in range(rows):
+            for c in range(cols):
+                val = self.env.grid[r, c]
+                if val == 0:      # free
+                    grid_img[r, c] = [0.9, 0.9, 0.9]
+                elif val == 1:    # obstacle
+                    grid_img[r, c] = [0.0, 0.0, 0.0]
+                elif val == 2:    # target
+                    grid_img[r, c] = [0.3, 0.8, 0.3]
+
+        ax.imshow(grid_img, origin="upper")
+
+        # Overlay agent paths: note x = col, y = row
+        if len(posA) > 0:
+            ax.plot(posA[:, 1], posA[:, 0], 'r-o', label='Agent A path', linewidth=2, markersize=4)
+            ax.scatter(posA[0, 1], posA[0, 0], c='darkred', marker='x', s=80, label='A start')
+            ax.scatter(posA[-1, 1], posA[-1, 0], c='yellow', edgecolors='k',
+                       marker='o', s=70, label='A end')
+
+        if len(posB) > 0:
+            ax.plot(posB[:, 1], posB[:, 0], 'b-s', label='Agent B path', linewidth=2, markersize=4)
+            ax.scatter(posB[0, 1], posB[0, 0], c='darkblue', marker='x', s=80, label='B start')
+            ax.scatter(posB[-1, 1], posB[-1, 0], c='cyan', edgecolors='k',
+                       marker='o', s=70, label='B end')
+
+        # Grid lines to show cell boundaries
+        ax.set_xticks(np.arange(-0.5, cols, 1), minor=False)
+        ax.set_yticks(np.arange(-0.5, rows, 1), minor=False)
+        ax.grid(color='k', linestyle='-', linewidth=0.5)
+        ax.set_xlim(-0.5, cols - 0.5)
+        ax.set_ylim(rows - 0.5, -0.5)
+
+        ax.set_xlabel("Column")
+        ax.set_ylabel("Row")
+        ax.set_title("Full Environment and Agent Trajectories")
+        ax.legend(loc='upper right', fontsize=8)
+        plt.tight_layout()
         plt.savefig(save_path)
         plt.close()
 
@@ -221,46 +256,50 @@ class MultiAgentEvaluator:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
         rows, cols = self.env.grid_size
-        heat_A = np.zeros((rows, cols))
-        heat_B = np.zeros((rows, cols))
-        count = np.zeros((rows, cols))
+        heat_A = np.zeros((rows, cols), dtype=np.float32)
+        heat_B = np.zeros((rows, cols), dtype=np.float32)
+        count_A = np.zeros((rows, cols), dtype=np.float32)
+        count_B = np.zeros((rows, cols), dtype=np.float32)
 
-        for r in range(rows):
-            for c in range(cols):
-                if self.env.grid[r, c] == 1:  # obstacle
-                    continue
+        for _ in range(100):
+            _, _, info = self.run_episode(render=False)
+            posA = info["positions_A"]
+            posB = info["positions_B"]
+            commA = info["comm_A"]
+            commB = info["comm_B"]
 
-                self.env.reset()
-                self.env.agent_positions = [(r, c), (r, c)]
+            for (r, c), s in zip(posA, commA):
+                heat_A[r, c] += abs(s)
+                count_A[r, c] += 1.0
+            for (r, c), s in zip(posB, commB):
+                heat_B[r, c] += abs(s)
+                count_B[r, c] += 1.0
 
-                sA = self.env._get_observation(0)
-                sB = self.env._get_observation(1)
+        # Avoid division by zero
+        maskA = count_A > 0
+        maskB = count_B > 0
+        avg_A = np.zeros_like(heat_A)
+        avg_B = np.zeros_like(heat_B)
+        avg_A[maskA] = heat_A[maskA] / count_A[maskA]
+        avg_B[maskB] = heat_B[maskB] / count_B[maskB]
 
-                aA, comA = self._greedy(self.model_A, sA)
-                aB, comB = self._greedy(self.model_B, sB)
+        fig, axs = plt.subplots(1, 2, figsize=(10, 4))
 
-                heat_A[r, c] += comA
-                heat_B[r, c] += comB
-                count[r, c] += 1
+        im0 = axs[0].imshow(avg_A, origin='upper', cmap='viridis')
+        axs[0].set_title("Agent A |comm|")
+        axs[0].set_xlabel("Column")
+        axs[0].set_ylabel("Row")
+        fig.colorbar(im0, ax=axs[0], fraction=0.046, pad=0.04)
 
-        heat_A /= np.maximum(count, 1)
-        heat_B /= np.maximum(count, 1)
+        im1 = axs[1].imshow(avg_B, origin='upper', cmap='viridis')
+        axs[1].set_title("Agent B |comm|")
+        axs[1].set_xlabel("Column")
+        axs[1].set_ylabel("Row")
+        fig.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
 
-        plt.figure(figsize=(12, 5))
-
-        plt.subplot(1, 2, 1)
-        plt.title("Communication Heatmap (Agent A)")
-        plt.imshow(heat_A, cmap="viridis")
-        plt.colorbar()
-
-        plt.subplot(1, 2, 2)
-        plt.title("Communication Heatmap (Agent B)")
-        plt.imshow(heat_B, cmap="viridis")
-        plt.colorbar()
-
+        plt.tight_layout()
         plt.savefig(save_path)
         plt.close()
-
 
     def test_generalization(self, num_configs: int = 10) -> Dict:
         """
@@ -277,28 +316,19 @@ class MultiAgentEvaluator:
         # TODO: Compare to training performance
         # TODO: Return generalization metrics
 
-        results = []
+        rewards, successes = [], []
 
-        for _ in range(num_configs):
+        for i in range(num_configs):
             self.env._initialize_grid()
-            r, s, info = self.run_episode(render=False)
-            results.append((r, s))
-
-        rewards = [x[0] for x in results]
-        successes = [x[1] for x in results]
+            self.env.reset()
+            reward, success, _ = self.run_episode()
+            rewards.append(reward)
+            successes.append(success)
 
         return {
-            "mean_reward": float(np.mean(rewards)),
-            "success_rate": float(np.mean(successes)),
-            "configs_tested": num_configs
+            "mean_reward_generalization": float(np.mean(rewards)),
+            "success_rate_generalization": float(np.mean(successes))
         }
-
-    def _greedy(self, model: nn.Module, obs: np.ndarray) -> Tuple[int, float]:
-        obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
-        with torch.no_grad():
-            q_values, comm = model(obs_t)
-        
-        return q_values.argmax(1).item(), comm.item()
 
 
 def load_trained_models(checkpoint_dir: str) -> Tuple[nn.Module, nn.Module]:
@@ -316,8 +346,8 @@ def load_trained_models(checkpoint_dir: str) -> Tuple[nn.Module, nn.Module]:
     # TODO: Load trained weights
     # TODO: Return initialized models
 
-    model_A = AgentDQN(input_dim=11, hidden_dim=64, num_actions=5)
-    model_B = AgentDQN(input_dim=11, hidden_dim=64, num_actions=5)
+    model_A = AgentDQN(11, 64, 5)
+    model_B = AgentDQN(11, 64, 5)
 
     model_A.load_state_dict(torch.load(os.path.join(checkpoint_dir, "agent_A.pt"), map_location="cpu"))
     model_B.load_state_dict(torch.load(os.path.join(checkpoint_dir, "agent_B.pt"), map_location="cpu"))
@@ -338,19 +368,9 @@ def create_evaluation_report(results: Dict, save_path: str = 'results/evaluation
     # TODO: Save as JSON report
 
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-    report = {
-        "summary": {
-            "overall_mean_reward": results["performance"]["mean_reward"],
-            "overall_success_rate": results["performance"]["success_rate"],
-            "communication_corr": results["communication"]["correlation"]
-        },
-        "details": results
-    }
-
     with open(save_path, "w") as f:
-        json.dump(report, f, indent=4)
-
+        json.dump(results, f, indent=4)
+    print(f"Evaluation report saved to {save_path}")
 
 
 def main():
@@ -367,31 +387,26 @@ def main():
     # TODO: Generate report
 
     checkpoint_dir = "results/agent_models"
-    os.makedirs("results", exist_ok=True)
-
     model_A, model_B = load_trained_models(checkpoint_dir)
 
-    env = MultiAgentEnv()
-
+    env = MultiAgentEnv(grid_size=(10, 10), max_steps=50, seed=61)
     evaluator = MultiAgentEvaluator(env, model_A, model_B)
 
-    performance = evaluator.evaluate_performance(100)
-    comm = evaluator.analyze_communication(20)
-    generalization = evaluator.test_generalization(10)
+    performance = evaluator.evaluate_performance(num_episodes=200)
+    comm_analysis = evaluator.analyze_communication(num_episodes=20)
+    generalization = evaluator.test_generalization(num_configs=10)
 
-    evaluator.visualize_trajectory("results/trajectory.png")
-    evaluator.plot_communication_heatmap("results/comm_heatmap.png")
+    evaluator.visualize_trajectory('results/trajectory.png')
+    evaluator.plot_communication_heatmap('results/comm_heatmap.png')
 
     results = {
         "performance": performance,
-        "communication": comm,
+        "communication": comm_analysis,
         "generalization": generalization
     }
 
-    create_evaluation_report(results, "results/evaluation_report.json")
-
-    print("Evaluation complete.")
-    print(json.dumps(results, indent=4))
+    create_evaluation_report(results)
+    print("Full evaluation complete.")
 
 
 if __name__ == '__main__':

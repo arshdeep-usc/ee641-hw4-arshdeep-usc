@@ -71,6 +71,8 @@ class MultiAgentTrainer:
         # TODO: Initialize replay buffer
         # TODO: Initialize epsilon for exploration
 
+        self.mode = args.mode
+
         input_dim = 11
         num_actions = 5
 
@@ -94,7 +96,7 @@ class MultiAgentTrainer:
         os.makedirs(self.models_dir, exist_ok=True)
         os.makedirs(self.logs_dir, exist_ok=True)
 
-        self.train_log = {"episode": [], "reward": [], "epsilon": []}
+        self.train_log = {"episode": [], "reward": [], "epsilon": [], "success":[]}
 
         print("Trainer initialized.")
 
@@ -161,9 +163,6 @@ class MultiAgentTrainer:
          nA, nB,
          d) = self.replay.sample(batch_size)
 
-        self.optim_A.zero_grad()
-        self.optim_B.zero_grad()
-
         sA_t = torch.tensor([apply_observation_mask(x, self.args.mode) for x in sA], dtype=torch.float32)
         sB_t = torch.tensor([apply_observation_mask(x, self.args.mode) for x in sB], dtype=torch.float32)
         nA_t = torch.tensor([apply_observation_mask(x, self.args.mode) for x in nA], dtype=torch.float32)
@@ -173,33 +172,41 @@ class MultiAgentTrainer:
         aA_t = torch.tensor(aA).long().unsqueeze(-1)
         aB_t = torch.tensor(aB).long().unsqueeze(-1)
 
-        qA, _ = self.net_A(sA_t)
-        qB, _ = self.net_B(sB_t)
-        qA_selected = qA.gather(1, aA_t)
-        qB_selected = qB.gather(1, aB_t)
+        self.optim_A.zero_grad()
+        self.optim_B.zero_grad()
+    
+        # ------------------------
+        # ONLINE Q-values (current states)
+        # ------------------------
+        qA_online, _ = self.net_A(sA_t)     # shape: [B, num_actions]
+        qB_online, _ = self.net_B(sB_t)
+    
+        qA_selected = qA_online.gather(1, aA_t)
+        qB_selected = qB_online.gather(1, aB_t)
 
-        #with torch.no_grad():
-        next_qA_online, _ = self.net_A(nA_t)
-        next_qB_online, _ = self.net_B(nB_t)
+        with torch.no_grad():
+            # Online next Q-values → select next actions
+            next_qA_online, _ = self.net_A(nA_t)
+            next_qB_online, _ = self.net_B(nB_t)
+    
+            next_actions_A = next_qA_online.argmax(dim=1, keepdim=True)
+            next_actions_B = next_qB_online.argmax(dim=1, keepdim=True)
+    
+            # Target networks evaluate chosen next actions
+            next_qA_target, _ = self.target_A(nA_t)
+            next_qB_target, _ = self.target_B(nB_t)
+    
+            qa_tgt = next_qA_target.gather(1, next_actions_A)
+            qb_tgt = next_qB_target.gather(1, next_actions_B)
 
-        next_actions_A = next_qA_online.argmax(dim=1, keepdim=True)
-        next_actions_B = next_qB_online.argmax(dim=1, keepdim=True)
-
-        next_qA_target, _ = self.target_A(nA_t)
-        next_qB_target, _ = self.target_B(nB_t)
-
-        qa_target = next_qA_target.gather(1, next_actions_A)
-        qb_target = next_qB_target.gather(1, next_actions_B)
-
-        target = r_t + self.args.gamma * (1 - d_t) * 0.5 * (qa_target + qb_target)
+            target = r_t + self.args.gamma * (1 - d_t) * 0.5 * (qa_tgt + qb_tgt)
 
         loss_A = F.mse_loss(qA_selected, target)
         loss_B = F.mse_loss(qB_selected, target)
         loss = loss_A + loss_B
-
-        
+    
+        # Backprop + update
         loss.backward()
-        
         self.optim_A.step()
         self.optim_B.step()
 
@@ -247,7 +254,7 @@ class MultiAgentTrainer:
             episode_reward += r
 
             if r == 10.0:
-                sucess = True
+                success = True
                 break
 
             if done:
@@ -276,14 +283,12 @@ class MultiAgentTrainer:
         for episode in range(1, self.args.num_episodes + 1):
             episode_reward, success = self.train_episode()
 
-            if episode % 100 == 0:
-                print(f"Episode: {episode} | Reward: {episode_reward:.2f} | Success: {success}")
-
             self.train_log["episode"].append(episode)
             self.train_log["reward"].append(episode_reward)
             self.train_log["epsilon"].append(self.epsilon)
+            self.train_log["success"].append(success)
 
-            log_path = os.path.join(self.logs_dir, "training_log.json")
+            log_path = os.path.join(self.logs_dir, "training_log_"+str(self.mode)+".json")
             with open(log_path, "w") as f:
                 json.dump(self.train_log, f, indent=4)
 
@@ -347,6 +352,10 @@ class MultiAgentTrainer:
 
                 sA, sB = nA, nB
                 total_r += r
+
+                if r == 10.0:
+                    success = True
+                    break
 
                 if done:
                     success = (r >= 10.0)
@@ -436,15 +445,15 @@ def main():
     
     episodes = np.array(trainer.train_log["episode"])
     rewards = np.array(trainer.train_log["reward"])
-    
-    successes = (rewards >= 2.0).astype(float)
-    
+    successes = np.array(trainer.train_log["success"])
+        
     def smooth(x, window=50):
         if window <= 1:
             return x
         cumsum = np.cumsum(np.insert(x, 0, 0))
         res = (cumsum[window:] - cumsum[:-window]) / float(window)
         pad = np.full(window - 1, res[0])
+        
         return np.concatenate([pad, res])
     
     rewards_smooth = smooth(rewards, window=50)
@@ -458,7 +467,7 @@ def main():
     ax1.tick_params(axis="y", labelcolor="tab:blue")
     
     ax2 = ax1.twinx()
-    ax2.set_ylabel("Success (Reward>=2.0) rate", color="tab:green")
+    ax2.set_ylabel("Success rate %", color="tab:green")
     ax2.plot(episodes, success_smooth, color="tab:green", label="Success (smoothed)")
     ax2.tick_params(axis="y", labelcolor="tab:green")
     ax2.set_ylim(-0.05, 1.05)
@@ -469,11 +478,8 @@ def main():
     plt.close()
 
     # Evaluate
-    mean_r, succ = trainer.evaluate(10)
-    print(f"Evaluation: mean_reward={mean_r:.2f}, success_rate={succ:.2f}")
-
-    print(args)
-
+    mean_r, succ = trainer.evaluate(1000)
+    print(f"Evaluation: mean_reward={mean_r:.2f}, success_rate={100*succ}")
 
 if __name__ == '__main__':
     main()
