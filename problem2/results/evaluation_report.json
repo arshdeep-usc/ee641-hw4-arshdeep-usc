@@ -1,0 +1,32 @@
+{
+    "summary": {
+        "overall_mean_reward": -1.85,
+        "overall_success_rate": 0.0,
+        "communication_corr": 0.3023275727646967
+    },
+    "details": {
+        "performance": {
+            "mean_reward": -1.85,
+            "median_reward": -4.999999999999998,
+            "success_rate": 0.0,
+            "avg_steps": 50.0,
+            "episodes": 100
+        },
+        "communication": {
+            "A_mean": 0.7583188414573669,
+            "A_std": 0.1747807413339615,
+            "A_max": 0.9769450426101685,
+            "A_min": 0.3026348650455475,
+            "B_mean": 0.730617105960846,
+            "B_std": 0.17834025621414185,
+            "B_max": 0.9794703125953674,
+            "B_min": 0.09088767319917679,
+            "correlation": 0.3023275727646967
+        },
+        "generalization": {
+            "mean_reward": -2.6899999999999986,
+            "success_rate": 0.0,
+            "configs_tested": 10
+        }
+    }
+}
