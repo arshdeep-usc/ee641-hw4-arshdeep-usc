@@ -132,6 +132,7 @@ class MultiAgentEvaluator:
         stats = {
             "mean_reward": float(np.mean(rewards)),
             "success_rate": float(np.mean(successes)),
+            "total_successes": float(np.count_nonzero(successes)),
             "avg_episode_length": float(np.mean(lengths)),
             "std_reward": float(np.std(rewards))
         }
@@ -393,7 +394,7 @@ def main():
     evaluator = MultiAgentEvaluator(env, model_A, model_B)
 
     performance = evaluator.evaluate_performance(num_episodes=200)
-    comm_analysis = evaluator.analyze_communication(num_episodes=20)
+    comm_analysis = evaluator.analyze_communication(num_episodes=200)
     generalization = evaluator.test_generalization(num_configs=10)
 
     evaluator.visualize_trajectory('results/trajectory.png')

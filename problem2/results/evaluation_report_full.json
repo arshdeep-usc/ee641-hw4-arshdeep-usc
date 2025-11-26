@@ -1,0 +1,20 @@
+{
+    "performance": {
+        "mean_reward": 30.858499999999996,
+        "success_rate": 0.005,
+        "total_successes": 1.0,
+        "avg_episode_length": 49.76,
+        "std_reward": 42.06084673125352
+    },
+    "communication": {
+        "mean_comm_A": 0.15886277975042468,
+        "mean_comm_B": 0.8128217083349824,
+        "var_comm_A": 0.01176796504636535,
+        "var_comm_B": 0.015701158757672314,
+        "correlation": -0.45886289111200124
+    },
+    "generalization": {
+        "mean_reward_generalization": -4.999999999999998,
+        "success_rate_generalization": 0.0
+    }
+}
