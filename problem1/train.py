@@ -84,8 +84,11 @@ def main():
     print("\nComparing algorithms...")
 
     policies_match = np.array_equal(vi_policy, qi_policy)
-    values_close = np.allclose(vi_values, qi_values, atol=1e-3)
+    values_close = np.allclose(vi_values, qi_values, atol=1e-5)
 
+    print(f"Vi_policy: {vi_policy}")
+    print(f"Qi_policy: {qi_policy}")
+    
     comparison = {
         "value_iteration_iterations": vi_iters,
         "q_iteration_iterations": qi_iters,
